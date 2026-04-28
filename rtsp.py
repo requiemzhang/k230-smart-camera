@@ -102,8 +102,8 @@ class RtspServer:
         # height = 360
         # width = 1920
         # height = 1080
-        width = 512   # 当前宽度 / Current width
-        height = 288  # 当前高度 / Current height
+        width = 640   # 当前宽度 / Current width
+        height = 480  # 当前高度 / Current height
         # width = 384
         # height = 216
 
@@ -111,8 +111,12 @@ class RtspServer:
         # 初始化传感器 / Initialize sensor
         self.sensor = Sensor()       # 创建传感器对象 / Create sensor object
         self.sensor.reset()          # 重置传感器 / Reset sensor
-        self.sensor.set_framesize(width=width, height=height, alignment=12)  # 设置帧大小 / Set frame size
-        self.sensor.set_pixformat(Sensor.YUV420SP)  # 设置像素格式为 YUV420SP / Set pixel format to YUV420SP
+        
+        self.sensor.set_framesize(width=width, height=height, alignment=12, chn=CAM_CHN_ID_0)  # 设置帧大小 / Set frame size
+        self.sensor.set_pixformat(Sensor.YUV420SP, chn=CAM_CHN_ID_0)  # 设置像素格式为 YUV420SP / Set pixel format to YUV420SP
+        
+        self.sensor.set_framesize(width=width, height=height, chn=CAM_CHN_ID_1)  # 设置显示通道帧大小 / Set display channel frame size
+        self.sensor.set_pixformat(Sensor.RGB565, chn=CAM_CHN_ID_1)  # 设置显示通道像素格式为 RGB565 / Set display channel pixel format to RGB565
 
         # 实例化视频编码器 / Instantiate video encoder
         self.encoder = Encoder()     # 创建编码器对象 / Create encoder object
@@ -122,6 +126,7 @@ class RtspServer:
 
         self.link = None  # 初始化链接为 None / Initialize link as None
         # 初始化媒体管理器 / Initialize media manager
+        Display.init(Display.ST7701, width=width, height=height, to_ide=True)
         MediaManager.init()  # 调用媒体管理器的初始化函数 / Call the media manager’s initialization function
         # 创建编码器 / Create encoder
         chnAttr = ChnAttrStr(self.encoder.PAYLOAD_TYPE_H264, self.encoder.H264_PROFILE_MAIN, width, height, bit_rate=100, dst_frame_rate=5, src_frame_rate=5)
@@ -148,6 +153,7 @@ class RtspServer:
         self.encoder.Stop(self.venc_chn)     # 停止编码器通道 / Stop encoder channel
         self.encoder.Destroy(self.venc_chn)  # 销毁编码器通道 / Destroy encoder channel
         # 清理缓冲区 / Clear buffer
+        Display.deinit()
         MediaManager.deinit()  # 反初始化媒体管理器 / Deinitialize media manager
 
     # RTSP streaming thread
@@ -159,10 +165,16 @@ class RtspServer:
 
             while self.start_stream:  # 当推流标志为 True 时循环 / Loop while streaming flag is True
                 # 捕获一帧 / Capture a frame
-                rtsp_show_img = self.sensor.snapshot()  # 从传感器获取一帧图像 / Get one frame from sensor
+                rtsp_show_img = self.sensor.snapshot(chn=CAM_CHN_ID_0)  # 从传感器获取一帧图像 / Get one frame from sensor
+
 
                 if rtsp_show_img == -1:  # 如果捕获失败，跳过本次循环 / If capture fails, skip this iteration
                     continue
+
+                display_img = self.sensor.snapshot(chn=CAM_CHN_ID_1)
+                if display_img != -1:
+                    Display.show_image(display_img)
+
                 frame_info.v_frame.width = rtsp_show_img.width()    # 设置帧宽度 / Set frame width
                 frame_info.v_frame.height = rtsp_show_img.height()  # 设置帧高度 / Set frame height
                 frame_info.v_frame.pixel_format = Sensor.YUV420SP   # 设置像素格式 / Set pixel format
