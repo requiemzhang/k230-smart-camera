@@ -21,6 +21,86 @@ from libs.PipeLine import PipeLine, ScopedTiming  # 从 libs 导入 PipeLine 和
 from libs.AIBase import AIBase  # 从 libs 导入 AIBase 类 / Import AIBase class from libs
 from libs.AI2D import Ai2d      # 从 libs 导入 Ai2d 类 / Import Ai2d class from libs
 
+class PTZTimer:
+   # """PTZ patrol timer. Call update() repeatedly in the main loop."""
+
+    PERIOD_MS = 0.1 * 60 * 1000
+    SERVO_PERIOD_MS = 20
+    MIN_PULSE_MS = 0.5
+    MAX_PULSE_MS = 2.5
+
+    def __init__(
+        self,
+        pan_pwm_id=0,
+        tilt_pwm_id=1,
+        pan_pin=42,
+        tilt_pin=43,
+        pan_center_ms=1.47,
+        tilt_center_ms=1.60,
+        period_ms=PERIOD_MS,
+    ):
+        from machine import FPIOA, PWM
+
+        self.period_ms = period_ms
+        self.pan_center_ms = pan_center_ms
+        self.tilt_center_ms = tilt_center_ms
+        self.index = 0
+        self.last_move_ms = time.ticks_ms()
+
+        # Same wiring as finall.py: GPIO42/PWM0 is pan, GPIO43/PWM1 is tilt.
+        fpioa = FPIOA()
+        fpioa.set_function(pan_pin, FPIOA.PWM0)
+        fpioa.set_function(tilt_pin, FPIOA.PWM1)
+
+        self.pan = PWM(pan_pwm_id, 50)
+        self.tilt = PWM(tilt_pwm_id, 50)
+        self.pan.enable(1)
+        self.tilt.enable(1)
+
+        # Each tuple is (pan_ms, tilt_ms). Tilt stays centered by default.
+        self.presets = (
+            (self.pan_center_ms, self.tilt_center_ms),
+            (1.20, self.tilt_center_ms),
+            (self.pan_center_ms, self.tilt_center_ms),
+            (1.80, self.tilt_center_ms),
+            (self.pan_center_ms, self.tilt_center_ms),
+        )
+
+        self.move_to(self.pan_center_ms, self.tilt_center_ms)
+
+    def _clamp(self, value, min_value, max_value):
+        if value < min_value:
+            return min_value
+        if value > max_value:
+            return max_value
+        return value
+
+    def _pulse_to_duty(self, pulse_ms):
+        pulse_ms = self._clamp(pulse_ms, self.MIN_PULSE_MS, self.MAX_PULSE_MS)
+        return round(pulse_ms / self.SERVO_PERIOD_MS * 100, 2)
+
+    def move_to(self, pan_ms, tilt_ms):
+        self.pan.duty(self._pulse_to_duty(pan_ms))
+        self.tilt.duty(self._pulse_to_duty(tilt_ms))
+
+    def move_next(self):
+        self.index = (self.index + 1) % len(self.presets)
+        pan_ms, tilt_ms = self.presets[self.index]
+        self.move_to(pan_ms, tilt_ms)
+        return self.index, pan_ms, tilt_ms
+
+    def update(self):
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self.last_move_ms) >= self.period_ms:
+            self.last_move_ms = now
+            return self.move_next()
+        return None
+
+    def deinit(self):
+        self.pan.enable(0)
+        self.tilt.enable(0)
+
+
 # Connect to WiFi
 # 连接到 WiFi 网络
 def Connect_WIFI(ID, PASSWORD):
@@ -111,10 +191,10 @@ class RtspServer:
         # 初始化传感器 / Initialize sensor
         self.sensor = Sensor()       # 创建传感器对象 / Create sensor object
         self.sensor.reset()          # 重置传感器 / Reset sensor
-        
+
         self.sensor.set_framesize(width=width, height=height, alignment=12, chn=CAM_CHN_ID_0)  # 设置帧大小 / Set frame size
         self.sensor.set_pixformat(Sensor.YUV420SP, chn=CAM_CHN_ID_0)  # 设置像素格式为 YUV420SP / Set pixel format to YUV420SP
-        
+
         self.sensor.set_framesize(width=width, height=height, chn=CAM_CHN_ID_1)  # 设置显示通道帧大小 / Set display channel frame size
         self.sensor.set_pixformat(Sensor.RGB565, chn=CAM_CHN_ID_1)  # 设置显示通道像素格式为 RGB565 / Set display channel pixel format to RGB565
 
@@ -247,6 +327,18 @@ if __name__ == "__main__":
     rtspserver.start()
     # 打印 RTSP 地址 / Print RTSP URL
     rtsp_address = rtspserver.get_rtsp_url()
+    ptz = PTZTimer()
+
+    def ptz_loop():
+        print("[PTZ] Timer started, move interval: 10 minutes")
+        while True:
+            result = ptz.update()
+            if result:
+                index, pan_ms, tilt_ms = result
+                print("[PTZ] Move to preset:", index, "pan:", pan_ms, "tilt:", tilt_ms)
+            time.sleep_ms(100)
+
+    _thread.start_new_thread(ptz_loop, ())
     print("[RTSP] Started successfully, address:", rtsp_address)  # 启动成功并显示地址 / Started successfully and show address
 
     # 推流 60 秒 / Stream for 60 seconds
